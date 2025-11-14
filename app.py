@@ -43,18 +43,20 @@ def search_api():
     logger.info(f"Received search request: {query_data}")
 
     try:
-        results = search_system.clip_search(query_data.get('query'), max_results=500)
-        return jsonify(results)
+        clip_results = search_system.clip_search(query_data.get('description'), max_results=500)
+        
+        if query_data.get('objects'):
+            object_results = search_system.object_search(query_data.get('objects'), projection={'video_id': 1, 'keyframe_index': 1})
+            results = search_system.intersect([clip_results, object_results])
+            return jsonify(results)
+
+        return jsonify(clip_results)
     except Exception as e:
         logger.error(f"An error occurred during search: {e}", exc_info=True)
         return jsonify({"error": "An internal error occurred during search."}), 500
 
 @app.route('/keyframes/<string:video_id>/keyframe_<int:keyframe_index>.webp')
 def serve_frame_image(video_id, keyframe_index):
-    """
-    Serves the actual keyframe image file to the front-end.
-    This allows the <img> tag to have a valid src URL.
-    """
     try:
         keyframe_dir = os.path.join(config.KEYFRAMES_DIR, video_id)
         filename = f"keyframe_{keyframe_index}.webp"
@@ -65,22 +67,16 @@ def serve_frame_image(video_id, keyframe_index):
 
 @app.route('/videos/<path:video_id>')
 def serve_video_file(video_id):
-    """
-    Phục vụ tệp video đầy đủ để phát lại trong modal.
-    """
     try:
-        # Giả sử video của bạn là tệp .mp4. Thay đổi phần mở rộng nếu cần.
         filename = f"{video_id}.mp4" 
         
-        # Gửi tệp từ thư mục chứa video của bạn.
-        # Đảm bảo bạn đã định nghĩa VIDEOS_DIR trong config.py
         return send_from_directory(
             config.VIDEOS_DIR, 
             filename,
-            as_attachment=False # Quan trọng: Đảm bảo trình duyệt phát tệp thay vì tải xuống
+            as_attachment=False 
         )
     except FileNotFoundError:
         return "Video not found", 404
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=True)

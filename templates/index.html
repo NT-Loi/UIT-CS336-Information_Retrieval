@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hybrid Video Search</title>
+    <title>Video Retrieval System</title>
     <!-- Links to the CSS file located in the /static folder -->
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 
     <header>
-        <h1>Hybrid Video Frame Retrieval</h1>
+        <h1>Video Retrieval System</h1>
     </header>
 
     <main>
@@ -18,7 +18,8 @@
         <div class="search-container">
             <form id="search-form">
                 <!-- Main semantic query input -->
-                <input type="text" id="main-query" name="query" placeholder="Enter a general description (e.g., 'a person walking a dog')...">
+                <!-- <label for="Description-filter">Description:</label> -->
+                <input type="text" id="main-query" name="description" placeholder="Enter a general description (e.g., 'a person walking a dog')...">
                 
                 <!-- Buttons to control UI -->
                 <button type="button" id="toggle-filters-btn">▼ Advanced Filters</button>
@@ -26,34 +27,31 @@
 
                 <!-- Hidden Advanced Filters Panel -->
                 <div id="advanced-filters" class="hidden">
-                    <div class="filter-group">
-                        <label for="text-filter">Text in Image (OCR):</label>
-                        <input type="text" id="text-filter" name="text" placeholder="e.g., 'Welcome' or 'Sale'">
-                    </div>
                     
                     <div class="filter-group">
-                        <label for="metadata-filter">Metadata Contains:</label>
-                        <input type="text" id="metadata-filter" name="metadata" placeholder="e.g., 'VTV3' or 'Interview'">
+                        <label for="Audio-filter">Audio:</label>
+                        <input type="text" id="audio-filter" name="audio" placeholder="e.g., 'Hello'">
                     </div>
 
                     <div class="filter-group">
-                        <label>Must Contain Objects:</label>
+                        <label>Objects:</label>
                         <div id="object-list">
                             <!-- JavaScript will add selected objects here -->
                         </div>
                         <div class="add-object-controls">
                             <select id="object-select">
-                                <!-- Pre-populate with common object labels you expect from your RCNN model -->
-                                <option value="Person">Person</option>
-                                <option value="Car">Car</option>
-                                <option value="Dog">Dog</option>
-                                <option value="Cat">Cat</option>
-                                <option value="Tree">Tree</option>
-                                <option value="Chair">Chair</option>
-                                <option value="Table">Table</option>
-                                <option value="Screen">Screen</option>
+                                <option value="person">Person</option>
+                                <option value="car">Car</option>
+                                <option value="dog">Dog</option>
+                                <option value="cat">Cat</option>
+                                <option value="tree">Tree</option>
+                                <option value="chair">Chair</option>
+                                <option value="table">Table</option>
+                                <option value="screen">Screen</option>
                             </select>
-                            <input type="number" id="object-count" value="1" min="1" title="Minimum count of this object">
+                            <input type="number" id="object-confidence" value="0.7" max="1" title="Confidence of this object">
+                            <input type="number" id="object-min" value="1" min="1" title="Minimum count of this object">
+                            <input type="number" id="object-max" value="" max="100000" title="Maximum count of this object">
                             <button type="button" id="add-object-btn">Add</button>
                         </div>
                     </div>
@@ -66,11 +64,8 @@
             <div class="sort-control">
                 <label for="sort-by-select">Sort by:</label>
                 <select id="sort-by-select">
-                    <option value="rerank_score" selected>Re-Ranker</option>
-                    <option value="rrf_score">RRF</option>
-                    <option value="vector_score">Semantic Similarity (Vector)</option>
-                    <option value="content_score">Content Match (OCR/Object)</option>
-                    <option value="metadata_score">Metadata Match</option>
+                    <option value="clip_score" selected >CLIP Score</option>
+                    <!-- <option value="rerank_score" selected>Re-Ranker</option> -->
                 </select>
             </div>
         </div>

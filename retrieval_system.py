@@ -59,7 +59,7 @@ class VideoRetrievalSystem:
             for hit in search_results[0]:
                 keyframe_scores.append({'video_id': hit.entity.get('video_id'),
                                         'keyframe_index': hit.entity.get('keyframe_index'),
-                                        'vector_score': hit.distance})                                       
+                                        'clip_score': hit.distance})                                       
             
         logger.info(f"CLIP: Found {len(keyframe_scores)} potential keyframes.")
         return keyframe_scores
@@ -148,6 +148,55 @@ class VideoRetrievalSystem:
         except Exception as e:
             logger.error(f"An error occurred during object search: {e}")
             return []
+    
+    def intersect(self, list_results: list[list[dict]]) -> list[dict]:
+        if not list_results:
+            return []
+        
+        if len(list_results) == 1:
+            return list_results[0]
+
+        # --- Step 1: Create a lookup map and an initial set of identifiers ---
+        # We use the first list as our baseline. Any keyframe in the final
+        # intersection MUST be present in this first list.
+        # The lookup map allows us to reconstruct the full dictionary at the end.
+        
+        first_list = list_results[0]
+        # The key is a tuple (video_id, keyframe_index), which is hashable.
+        # The value is the original keyframe dictionary.
+        lookup_map = {
+            (kf['video_id'], kf['keyframe_index']): kf 
+            for kf in first_list
+        }
+        
+        # This set contains the unique identifiers from the first list.
+        # This will be our "running intersection".
+        intersecting_ids = set(lookup_map.keys())
+
+        # --- Step 2: Iterate and intersect with the rest of the lists ---
+        # We start from the second list (index 1).
+        for other_list in list_results[1:]:
+            # Convert the current list into a set of its unique identifiers.
+            other_list_ids = set(
+                (kf['video_id'], kf['keyframe_index']) for kf in other_list
+            )
+            
+            # Perform the core intersection logic.
+            # The "&=" operator updates a set with the intersection of itself
+            # and another set. It's highly efficient.
+            intersecting_ids &= other_list_ids
+            
+            # Optimization: If the intersection ever becomes empty,
+            # we can stop early as the final result will also be empty.
+            if not intersecting_ids:
+                break
+
+        # --- Step 3: Convert the final set of identifiers back to a list of dicts ---
+        # We use our lookup_map to retrieve the original, full dictionary
+        # for each identifier that survived the intersection process.
+        final_results = [lookup_map[id_tuple] for id_tuple in intersecting_ids]
+        
+        return final_results
         
 # --- Example Usage ---
 if __name__ == '__main__':

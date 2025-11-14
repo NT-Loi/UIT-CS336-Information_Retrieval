@@ -8,7 +8,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const addObjectBtn = document.getElementById('add-object-btn');
     const objectList = document.getElementById('object-list');
     const objectSelect = document.getElementById('object-select');
-    const objectCount = document.getElementById('object-count');
+    const objectMin = document.getElementById('object-min');
+    const objectMax = document.getElementById('object-max');
+    const objectConfidence = document.getElementById('object-confidence');
     const resultsContainer = document.getElementById('results-container');
     const sortBySelect = document.getElementById('sort-by-select');
     
@@ -35,17 +37,25 @@ document.addEventListener('DOMContentLoaded', () => {
         
         const formData = new FormData(searchForm);
         const query_data = {
-            query: formData.get('query'),
-            text: formData.get('text'),
-            metadata: formData.get('metadata'),
-            objects: []
+            description: formData.get('description'),
+            objects: [], 
+            audio: formData.get('audio')
         };
         
         document.querySelectorAll('.object-item').forEach(item => {
-            query_data.objects.push([
-                item.getAttribute('data-label'),
-                parseInt(item.getAttribute('data-count'))
-            ]);
+            const objectQuery = {
+                label: item.getAttribute('data-label'),
+                confidence: parseFloat(item.getAttribute('data-confidence')),
+                min_instances: parseInt(item.getAttribute('data-min'), 10) // It's good practice to add the radix 10
+            };
+
+            const maxInstancesValue = item.getAttribute('data-max');
+
+            if (maxInstancesValue) {
+                objectQuery.max_instances = parseInt(maxInstancesValue, 10);
+            }
+
+            query_data.objects.push(objectQuery);
         });
         
         console.log('Sending search request to backend:', query_data);
@@ -88,7 +98,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     addObjectBtn.addEventListener('click', () => {
         const label = objectSelect.value;
-        const count = objectCount.value;
+        const min = objectMin.value;
+        const max = objectMax.value;
+        const confidence = objectConfidence.value;
 
         if (document.querySelector(`.object-item[data-label="${label}"]`)) {
             alert('Object already added.');
@@ -98,8 +110,19 @@ document.addEventListener('DOMContentLoaded', () => {
         const objectItem = document.createElement('div');
         objectItem.classList.add('object-item');
         objectItem.setAttribute('data-label', label);
-        objectItem.setAttribute('data-count', count);
-        objectItem.innerHTML = `<span>${label} (Count: >= ${count})</span><button type="button" class="remove-obj-btn">X</button>`;
+        objectItem.setAttribute('data-min', min);
+        objectItem.setAttribute('data-max', max);
+        objectItem.setAttribute('data-confidence', confidence);
+        
+        let countText;
+
+        if (!max || max.trim() === '') {
+            countText = `Count: >= ${min}`;
+        } else {
+            countText = `Count: [${min}, ${max}]`;
+        }
+
+        objectItem.innerHTML = `<span>${label} (Confidence: >= ${confidence}, ${countText})</span><button type="button" class="remove-obj-btn">X</button>`;
         objectList.appendChild(objectItem);
     });
 
@@ -165,8 +188,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const sortedResults = [...results]; // Create a copy to sort
 
         sortedResults.sort((a, b) => {
-            // vector_score is a distance (lower is better)
-            if (sortBy === 'vector_score') {
+            // clip_score is a distance (lower is better)
+            if (sortBy === 'clip_score') {
                 const scoreA = a[sortBy] === null ? Infinity : a[sortBy];
                 const scoreB = b[sortBy] === null ? Infinity : b[sortBy];
                 return scoreA - scoreB; // Ascending sort
@@ -198,19 +221,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 >
                 <div class="result-info">
                     <h3>${item.video_id} / Frame ${item.keyframe_index}</h3>
-                    <p class="${sortBy === 'rerank_score' ? 'sorted-by' : ''}">
-                        <strong>Re-Rank Score: ${item.rerank_score ? item.rerank_score.toFixed(4) : 'N/A'}</strong>
-                    </p>
                     <div class="result-scores">
                         <!-- This logic is a bit complex, but it highlights the right score -->
-                        ${ ['rerank_score', 'rrf_score', 'vector_score', 'content_score', 'metadata_score'].map(score_name => {
+                        ${ ['clip_score'].map(score_name => {
                             const isSorted = sortBy === score_name;
                             const score_label_map = {
-                                rerank_score: 'Rerank Score',
-                                rrf_score: 'RRF Score',
-                                vector_score: 'Vector Dist',
-                                content_score: 'Content Score',
-                                metadata_score: 'Metadata Score'
+                                // rerank_score: 'Rerank Score',
+                                // rrf_score: 'RRF Score',
+                                clip_score: 'Clip Score',
+                                // content_score: 'Content Score',
+                                // metadata_score: 'Metadata Score'
                             }
                             const label = score_label_map[score_name];
                             const value = item[score_name] ? item[score_name].toFixed(4) : 'N/A';
