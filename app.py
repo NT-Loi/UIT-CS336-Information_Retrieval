@@ -1,7 +1,7 @@
 import os
 from flask import Flask, render_template, request, jsonify, send_from_directory
 import logging
-from retrieval_system import HybridVideoRetrievalSystem 
+from retrieval_system import VideoRetrievalSystem 
 import config
 
 log_file = "system.log"
@@ -17,10 +17,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 try:
-    search_system = HybridVideoRetrievalSystem(re_ingest=False)
-    logger.info("✅ Search system loaded successfully!")
+    search_system = VideoRetrievalSystem(re_ingest=False)
+    logger.info("Search system initialized successfully!")
 except Exception as e:
-    logger.error(f"💥 Failed to load search system: {e}")
+    logger.error(f"Failed to initialize search system: {e}")
     search_system = None
 
 @app.route('/')
@@ -43,7 +43,7 @@ def search_api():
     logger.info(f"Received search request: {query_data}")
 
     try:
-        results = search_system.search(query_data=query_data, top_k=100)
+        results = search_system.clip_search(query_data.get('query'), max_results=500)
         return jsonify(results)
     except Exception as e:
         logger.error(f"An error occurred during search: {e}", exc_info=True)
@@ -83,4 +83,4 @@ def serve_video_file(video_id):
         return "Video not found", 404
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)

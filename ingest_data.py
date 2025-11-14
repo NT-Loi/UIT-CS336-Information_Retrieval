@@ -1,13 +1,12 @@
 import logging
-import json
 from pathlib import Path
 import numpy as np
-from elasticsearch import Elasticsearch
-from elasticsearch.helpers import bulk
 from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
-from collections import Counter
+from pymongo import MongoClient, UpdateOne
 import config
 import torch
+import os
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -40,137 +39,96 @@ def ingest_keyframe_data(collection: Collection):
             frame_indices.append(frame_idx)
         vectors = np.vstack(vectors)
         num_vectors = len(vectors)
-        entities = [[video_id] * len(vectors), frame_indices, vectors]
+        entities = [[video_id] * num_vectors, frame_indices, vectors]
         collection.insert(entities)
     collection.flush()
     logger.info("Keyframe data ingestion complete.")
 
-def setup_es_index(es_client, index_name, mappings=None, actions_generator=None):
-    if es_client.indices.exists(index=index_name):
-        logger.warning(f"Index '{index_name}' already exists. Dropping.")
-        try:
-            es_client.indices.delete(index=index_name)
-        except Exception as e:
-            logger.error(f"Failed to delete existing index '{index_name}': {e}")
-            return 
-
-    logger.info(f"Attempting to create index '{index_name}'...")
-    try:
-        create_body = {"mappings": mappings} if mappings else None
-        es_client.indices.create(
-            index=index_name, 
-            body=create_body,
-            ignore=[400] # Ignore 'Bad Request' errors
-        )
-        logger.info(f"Index '{index_name}' created or already existed.")
-    except Exception as e:
-        # This will now only catch other, unexpected errors
-        logger.error(f"An unexpected error occurred during index creation: {e}")
-        raise e
-
-    if actions_generator:
-        logger.info(f"Ingesting data into '{index_name}'...")
-        bulk(es_client, actions_generator())
-        logger.info("Data ingestion complete.")
-
-def generate_metadata_actions():
-    for metadata_file in Path(config.METADATA_DIR).glob("*.json"):
-        video_id = metadata_file.stem
-        with open(metadata_file, 'r', encoding='utf-8') as f:
-            doc = json.load(f)
-        yield {"_index": config.METADATA_INDEX_NAME, "_id": video_id, "_source": doc}
-
-def load_json(path):
-    if path.exists():
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {}
-
-def load_od_data(video_dir: Path, threshold: float = 0.5) -> dict:
+def setup_mongodb_collection(mongo_client, db_name, collection_name, drop_existing=True):
     """
-    Loads object detection JSON files, filters by score, and counts object occurrences.
-
+    Setup MongoDB collection for object detection metadata.
+    
+    Args:
+        mongo_client: MongoClient instance
+        db_name: Database name
+        collection_name: Collection name
+        drop_existing: If True, drop existing collection
+    
     Returns:
-        dict: A dictionary mapping frame indices to a dictionary of object counts.
-              e.g., {"001": {"Person": 2, "Car": 1}}
+        MongoDB collection instance
     """
-    all_frames_data = {}
-    if not video_dir.exists():
-        logger.warning(f"Object detection directory not found: {video_dir}")
-        return all_frames_data
+    db = mongo_client[db_name]
+    
+    if drop_existing and collection_name in db.list_collection_names():
+        logger.warning(f"MongoDB collection '{collection_name}' already exists. Dropping.")
+        db[collection_name].drop()
+    
+    collection = db[collection_name]
+    
+    # Create indexes for efficient querying
+    collection.create_index([("video_id", 1), ("keyframe_index", 1)], unique=True)
+    collection.create_index([("objects.label", 1)])
+    collection.create_index([("objects.confidence", 1)])
+    
+    logger.info(f"MongoDB collection '{collection_name}' created with indexes.")
+    return collection
 
-    for json_file in video_dir.glob("*.json"):
-        try:
-            frame_idx = json_file.stem
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-
-            scores = data.get("detection_scores", [])
-            entities = data.get("detection_class_entities", [])
-
-            if len(scores) != len(entities):
-                logger.warning(f"Mismatch between scores and entities in {json_file}. Skipping.")
-                continue
-
-            filtered_entities = []
-            for score_str, entity in zip(scores, entities):
-                try:
-                    if float(score_str) > threshold:
-                        filtered_entities.append(entity)
-                except (ValueError, TypeError):
-                    continue
+def ingest_object_detection_data(mongo_collection, folder_path):
+    """
+    Ingest object detection metadata into MongoDB.
+    """
+    logger.info("Ingesting object detection data into MongoDB...")
+    
+    if not os.path.isdir(folder_path):
+        logger.error(f"Object detection directory not found: {folder_path}")
+        return
+    
+    for filename in os.listdir(folder_path):
+        if filename.endswith("_rfdetr_results.csv"):
+            full_path = os.path.join(folder_path, filename)
+            video_id = filename.replace("_rfdetr_results.csv", "")
             
-            if filtered_entities:
-                object_counts = Counter(filtered_entities)
-                all_frames_data[frame_idx] = dict(object_counts)
+            logger.info(f"--- Processing file: {os.path.basename(full_path)} ---")
 
-        except json.JSONDecodeError:
-            logger.error(f"Could not decode JSON from {json_file}")
-        except Exception as e:
-            logger.error(f"Error processing {json_file}: {e}")
-            
-    return all_frames_data
+            try:
+                df = pd.read_csv(full_path)
+                df.columns = df.columns.str.strip()
+                grouped = df.groupby('frame')
 
-def generate_frames_actions():
-    all_video_ids = {p.stem for p in Path(config.METADATA_DIR).glob("*.json")}
+                bulk_operations = []
+                for frame_index, group in grouped:
+                    frame_index = int(frame_index.replace("keyframe_", "").replace(".webp", ""))
+                    objects_list = group.apply(
+                        lambda row: {
+                            'class': row['class'],
+                            'confidence': float(row['confidence']),
+                            'bounding_box': {
+                                'x': int(row['x']),
+                                'y': int(row['y']),
+                                'width': int(row['width']),
+                                'height': int(row['height'])
+                            }
+                        },
+                        axis=1
+                    ).tolist()
+                    bulk_operations.append(
+                        UpdateOne(
+                            {"video_id": video_id, "keyframe_index": int(frame_index)},
+                            {"$set": {"objects": objects_list}},
+                            upsert=True
+                        )
+                    )
 
-    for video_id in all_video_ids:
-        ocr_data = load_json(Path(config.OCR_DIR) / f"{video_id}.json")
-
-        obj_dir = Path(config.OBJECT_DETECTION_DIR) / video_id
-        obj_data = load_od_data(obj_dir, threshold=0.5)
-        
-        all_frame_indices = set(ocr_data.keys()) | set(obj_data.keys())
-
-        for frame_idx_str in all_frame_indices:
-            frame_idx = int(frame_idx_str)
-            
-            # Get the dictionary of object counts for the frame. Default to an empty dict.
-            object_counts = obj_data.get(frame_idx_str, {})
-
-            # Directly create the nested structure for Elasticsearch from the counts.
-            nested_objects = [{"label": label, "count": count} for label, count in object_counts.items()]
-
-            doc = {
-                "video_id": video_id,
-                "keyframe_index": frame_idx,
-                "ocr_text": ocr_data.get(frame_idx_str, ""),
-                "detected_objects": nested_objects
-            }
-            yield {"_index": config.ES_FRAMES_INDEX_NAME, "_id": f"{video_id}_{frame_idx}", "_source": doc}
+                logger.info(f"Executing bulk upsert for {len(bulk_operations)} frames for video_id '{video_id}'...")
+                result = mongo_collection.bulk_write(bulk_operations)
+                logger.info(f"Insert/Update complete for '{video_id}'. Inserted: {result.upserted_count}, Updated: {result.modified_count}\n")
+            except Exception as e:
+                logger.error(f"An error occurred while processing {full_path}: {e}")
+    logger.info(f"Object detection data ingestion complete.")
 
 def main():
-    # Connect to services
-    connections.connect("default", host=config.MILVUS_HOST, port=config.MILVUS_PORT)
-    # es = Elasticsearch(f"http://{config.ES_HOST}:{config.ES_PORT}",
-    #                     timeout=60,
-    #                     max_retries=3, 
-    #                     retry_on_timeout=True)
-    
-    # if not es.ping():
-    #     raise ConnectionError("Initial ping to Elasticsearch failed.")
-
     # --- Milvus Ingestion ---
+    connections.connect("default", host=config.MILVUS_HOST, port=config.MILVUS_PORT)
     kf_fields = [
         FieldSchema(name="pk", dtype=DataType.INT64, is_primary=True, auto_id=True),
         FieldSchema(name="video_id", dtype=DataType.VARCHAR, max_length=20),
@@ -183,23 +141,17 @@ def main():
     kf_collection = setup_milvus_collection(config.KEYFRAME_COLLECTION_NAME, kf_schema, "keyframe_vector", kf_index_params)
     ingest_keyframe_data(kf_collection)
 
-    # --- Elasticsearch Ingestion ---
-    # setup_es_index(es, config.METADATA_INDEX_NAME, actions_generator=generate_metadata_actions)
-    
-    # frames_mappings = {
-    #             "properties": {
-    #                 "video_id": {"type": "keyword"},
-    #                 "keyframe_index": {"type": "integer"},
-    #                 "ocr_text": {"type": "text"},
-    #                 "detected_objects": {
-    #                     "type": "nested",
-    #                     "properties": {
-    #                         "label": {"type": "keyword"},
-    #                         "count": {"type": "integer"}
-    #                     }
-    #                 }
-    #             }
-    #         }
-    # setup_es_index(es, config.ES_FRAMES_INDEX_NAME, mappings=frames_mappings, actions_generator=generate_frames_actions)
+    # --- MongoDB Ingestion ---
+    mongo_client = MongoClient(config.MONGO_URI)
+    object_collection = setup_mongodb_collection(
+        mongo_client,
+        config.MONGO_DB_NAME,
+        config.MONGO_OBJECT_COLLECTION,
+        drop_existing=True
+    )
+    ingest_object_detection_data(object_collection, folder_path=config.OBJECT_DETECTION_DIR)
 
     logger.info("--- DATA INGESTION COMPLETE ---")
+
+    # Close connections
+    mongo_client.close()

@@ -1,169 +1,163 @@
 import logging
 from pymilvus import connections, Collection
-# from elasticsearch import Elasticsearch
+from pymongo import MongoClient
 import torch
-from PIL import Image, UnidentifiedImageError
-import os
-
 import config
 from utils.text_encoder import TextEncoder
-# from utils.ranker import rrf_ranker, CrossModalReRanker
-from retrievers import milvus_retriever, es_retriever
 
 # --- Setup Logging ---
-# log_file = "system.log"
-# logging.basicConfig(
-#     level=logging.INFO,
-#     format="%(asctime)s [%(levelname)s] - %(message)s",
-#     handlers=[
-#         logging.FileHandler(log_file),
-#     ]
-# )
 logger = logging.getLogger(__name__)
 
-class HybridVideoRetrievalSystem:
+class VideoRetrievalSystem:
     def __init__(self, re_ingest=False):
         if re_ingest:
             from ingest_data import main
             main()
 
-        logger.info("Initializing Hybrid Video Retrieval System...")
+        logger.info("Initializing Video Retrieval System...")
 
-        # Initialize connections
+        # --- Milvus ---
         connections.connect("default", host=config.MILVUS_HOST, port=config.MILVUS_PORT)
         logger.info("Successfully connected to Milvus.")
-
-        # self.es = Elasticsearch(f"http://{config.ES_HOST}:{config.ES_PORT}", timeout=30, retry_on_timeout=True, max_retries=3)
-        # if not self.es.ping():
-            # raise ConnectionError("Could not connect to Elasticsearch.")
-        # logger.info("Successfully connected to Elasticsearch.")
-        
-        # Load Milvus collections
         self.keyframes_collection = Collection(config.KEYFRAME_COLLECTION_NAME)
         self.keyframes_collection.load()
-        
-        # Initialize the text encoder and reranker
+
+        # --- MongoDB ---
+        mongo_client = MongoClient(config.MONGO_URI)
+        mongo_db = mongo_client[config.MONGO_DB_NAME]
+        self.object_collection = mongo_db[config.MONGO_OBJECT_COLLECTION]
+        logger.info("Successfully connected to MongoDB.")
+
+        # Initialize the text encoder
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.encoder = TextEncoder(device=self.device)
-        # self.reranker = CrossModalReRanker(device=self.device)
 
-    def _load_keyframe_image(self, video_id: str, keyframe_index: int):
+    def clip_search(self, query: str = "", max_results: int = 200) -> list:
         """
-        Loads a single keyframe image from disk as a PIL Image.
-        This function is hardened to only return a valid Image object or None.
+        Searching on CLIP embeddings.
         """
-        try:
-            filename = f"{keyframe_index:03d}.jpg"
-            image_path = os.path.join(config.KEYFRAMES_DIR, video_id, filename)
-            
-            # Check if file exists before trying to open it
-            if not os.path.exists(image_path):
-                # logger.warning(f"Image file not found: {image_path}")
-                return None
-
-            img = Image.open(image_path)
-            
-            # CRITICAL: Ensure the image is in RGB format. Some models fail on
-            # single-channel (grayscale) or RGBA images. This standardizes it.
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
-
-            return img
-        
-        except FileNotFoundError:
-            # This is redundant if we use os.path.exists, but good to have
-            return None
-        except UnidentifiedImageError:
-            # This handles cases where the file exists but is corrupted or not an image
-            logger.warning(f"Could not identify image file (corrupted?): {image_path}")
-            return None
-        except Exception as e:
-            # Catch any other unexpected errors during image loading
-            logger.error(f"Unexpected error loading image {image_path}: {e}")
-            return None
-
-    def search(self, query_data: dict, top_k: int = 20):
-        """
-        Performs a multi-stage search:
-        1. Retrieval: Hybrid search (Milvus + ES) to get candidates.
-        2. Re-ranking: Cross-Encoder model to re-order the top candidates.
-        """
-        logger.info(f"--- 💠 Starting search with data: {query_data} ---")
-        
-        query = query_data.get("query", "")
-        object_list = query_data.get("objects")
-        text = query_data.get("text", "")
-        metadata = query_data.get("metadata", "")
-
-        if not query:
-            object_query = ""
-            if object_list:
-                temp = [str(label) + str(count) for label, count in object_list]
-                object_query = " ".join(temp)
-            query = ' '.join(filter(None, [object_query, text, metadata]))
+        logger.info(f"--- Start searching on CLIP embeddings with query: '{query}' ---")
 
         if not query:
             logger.warning("Search initiated with no query data.")
             return []
 
-        logger.info("1/3: Searching...")
         query_vector = self.encoder.encode(query)
-        vector_scores = milvus_retriever.search_keyframes(self.keyframes_collection, query_vector)
-        # meta_scores = es_retriever.search_metadata(self.es, metadata)
-        # content_scores = es_retriever.search_keyframes(self.es, text, object_list)
-
-
-
-
-        # logger.info("2/3: Fusing retrieval results...")
-        # ranked_vector_scores = sorted(vector_scores.items(), key=lambda item: item[1])
-        # ranked_content_scores = sorted(content_scores.items(), key=lambda item: item[1], reverse=True)
-        # candidate_frames_set = set(vector_scores.keys()) | set(content_scores.keys())
-        # meta_propagated = {frame: meta_scores.get(frame[0], 0) for frame in candidate_frames_set}
-        # ranked_meta_scores = sorted(meta_propagated.items(), key=lambda item: item[1], reverse=True)
         
-        # fused_scores = rrf_ranker([ranked_vector_scores, ranked_content_scores, ranked_meta_scores])
-        # ranked_fused_scores = sorted(fused_scores.items(), key=lambda item: item[1], reverse=True)
-        
-        # NUM_CANDIDATES_TO_RERANK = top_k * 5
-        # candidates_for_reranking = [key for key, score in ranked_fused_scores[:NUM_CANDIDATES_TO_RERANK]]
-        
-        # logger.info(f"3/3: Re-ranking top {len(candidates_for_reranking)} candidates...")
-        # reranked_scores = self.reranker.rerank(
-        #     text_query=query,
-        #     candidate_frames=candidates_for_reranking,
-        #     image_loader_func=self._load_keyframe_image 
-        # )
+        search_params = {"metric_type": "L2", "params": {"nprobe": 10}}
+    
+        search_results = self.keyframes_collection.search(
+            data=query_vector,
+            anns_field="keyframe_vector", 
+            param=search_params,
+            limit=max_results,
+            output_fields=["video_id", "keyframe_index"]
+        )
 
-        # ranked_reranked_scores = sorted(reranked_scores.items(), key=lambda item: item[1], reverse=True)
-
-        ranked_vector_scores = sorted(vector_scores.items(), key=lambda item: item[1], reverse=True)
-
-        results = []
-        for (video_id, keyframe_index), rerank_score in ranked_vector_scores[:top_k]:
-            key = (video_id, keyframe_index)
-            results.append({
-                "video_id": video_id,
-                "keyframe_index": keyframe_index,
-                "vector_score": vector_scores.get(key),
-                "content_score": 0,
-                "metadata_score": 0,
-                "rrf_score": 0,
-                "rerank_score": 0
-            })
-                
-        # reranked_results is a sorted list of [((vid, idx), rerank_score), ...]
-        # for (video_id, keyframe_index), rerank_score in ranked_reranked_scores[:top_k]:
-        #     key = (video_id, keyframe_index)
-        #     results.append({
-        #         "video_id": video_id,
-        #         "keyframe_index": keyframe_index,
-        #         "vector_score": vector_scores.get(key),
-        #         "content_score": content_scores.get(key),
-        #         "metadata_score": meta_scores.get(video_id),
-        #         "rrf_score": fused_scores.get(key),
-        #         "rerank_score": rerank_score
-        #     })
+        keyframe_scores = []
+        if search_results:
+            for hit in search_results[0]:
+                keyframe_scores.append({'video_id': hit.entity.get('video_id'),
+                                        'keyframe_index': hit.entity.get('keyframe_index'),
+                                        'vector_score': hit.distance})                                       
             
-        logger.info(f"Search complete. {results}")
-        return results
+        logger.info(f"CLIP: Found {len(keyframe_scores)} potential keyframes.")
+        return keyframe_scores
+        
+    def object_search(self, queries: list[dict], projection: dict = None) -> list[dict]:
+        """
+        Search keyframes where objects match all specified query conditions.
+        Args:
+            queries (list[dict]): A list of query dictionaries. Example format:
+                [
+                    {'label': 'car', 'confidence': 0.5, 'min_instances': 1, 'max_instances': 3},
+                    {'label': 'person', 'confidence': 0.7, 'min_instances': 1}
+                ]
+        Returns:
+            list[dict]: A list of matching documents (keyframes) from the collection.
+        """
+        if not queries:
+            return []
+        
+        try:
+            # Extract all labels for pre-filtering
+            labels = list(set(q['label'] for q in queries))
+            
+            pipeline = [
+                # Pre-filter: Only documents that have at least one of the required labels
+                {
+                    "$match": {
+                        "objects.class": {"$in": labels}
+                    }
+                }
+            ]
+            
+            # Build aggregation conditions
+            all_conditions = []
+            
+            for query in queries:
+                label = query['label']
+                min_confidence = query.get('confidence', 0.0)
+                min_instances = query.get('min_instances')
+                max_instances = query.get('max_instances')
+                
+                if min_instances is None and max_instances is None:
+                    raise ValueError(f"Query for label '{label}' must have at least min_instances or max_instances.")
+                
+                filter_expr = {
+                    "$filter": {
+                        "input": "$objects",
+                        "as": "obj",
+                        "cond": {
+                            "$and": [
+                                {"$eq": ["$$obj.class", label]},
+                                {"$gte": ["$$obj.confidence", min_confidence]}
+                            ]
+                        }
+                    }
+                }
+                
+                size_expr = {"$size": filter_expr}
+                
+                query_conditions = []
+                if min_instances is not None:
+                    query_conditions.append({"$gte": [size_expr, min_instances]})
+                if max_instances is not None:
+                    query_conditions.append({"$lte": [size_expr, max_instances]})
+                
+                if len(query_conditions) == 1:
+                    all_conditions.append(query_conditions[0])
+                else:
+                    all_conditions.append({"$and": query_conditions})
+            
+            # Add the expression match
+            pipeline.append({
+                "$match": {
+                    "$expr": {"$and": all_conditions} if len(all_conditions) > 1 else all_conditions[0]
+                }
+            })
+            
+            # Add projection if specified
+            if projection:
+                pipeline.append({"$project": projection})
+            
+            results = list(self.object_collection.aggregate(pipeline))
+            logger.info(f"MongoDB: Found {len(results)} keyframes matching queries.")
+            return results
+            
+        except Exception as e:
+            logger.error(f"An error occurred during object search: {e}")
+            return []
+        
+# --- Example Usage ---
+if __name__ == '__main__':
+    searcher = VideoRetrievalSystem()
+    query1 = [
+        {'label': 'car', 'confidence': 0.5, 'min_instances': 1, 'max_instances': 3},
+        {'label': 'person', 'confidence': 0.7, 'min_instances': 1}
+    ]
+    import time
+    print('Start searching')
+    start = time.time()
+    matching_frames = searcher.object_search(query1, projection={'_id': 1, 'video_id': 1, 'keyframe_id': 1})
+    print('Filter take: ', time.time()-start)

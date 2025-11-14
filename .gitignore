@@ -1,6 +1,6 @@
 data
 volumes
 __pycache__
-note.txt
 *.log
 .venv
+*.ipynb

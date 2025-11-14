@@ -1,4 +1,4 @@
-# Hybrid Text-to-Video Search System
+# Video Retrieval System
 
 ## How It Works
 
@@ -11,7 +11,7 @@
 3.  **Result Fusion**:
     -   The ranked lists of videos from Elasticsearch and Milvus are combined using RRF. This produces a final, unified ranking that leverages both keyword relevance and semantic context.
 
-## File Tree
+## Data Tree
 
 ```
 ├── 📁 retrievers/
@@ -40,30 +40,25 @@
 
 ## Setup and Usage
 
-### 1. Prerequisites
-
--   Docker and Docker Compose
--   Python 3.8+
--   Your video metadata (`.json`) and CLIP feature vectors (`.npy`)
-
-### 2. Configure the Environment
+### 1. Configure the Environment
 
 Create a `config.py` file and populate it with the necessary paths and settings.
 
-### 3. Start Services
+### 2. Start Services
 
 ```bash
 docker compose up -d
 ```
 
-### 4. Install Python Dependencies
+### 3. Install Python Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
 ### 5. Run the System
+To ingest data for the first time, please set 're_ingest'=True.
 
 ```bash
-streamlit run app.py
+python app.py
 ```

@@ -70,9 +70,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const keyframeIndex = parseInt(resultImage.dataset.keyframeIndex);
             
             // Assuming 1 keyframe per second. Adjust if your rate is different.
-            const frameRate = 1; 
-            let startTime = keyframeIndex * frameRate;
-            startTime = Math.max(0, startTime - 5); // Start 5s before for context
+            const frameRate = 25; 
+            let startTime = keyframeIndex / frameRate;
+            startTime = Math.max(0, startTime - 0.5); // Start 0.5s before for context
 
             openModal(videoId, startTime);
         }

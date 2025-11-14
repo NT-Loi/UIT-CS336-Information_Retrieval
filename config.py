@@ -1,31 +1,23 @@
-# --- Milvus/Elasticsearch connection settings ---
+# --- Milvus settings ---
 MILVUS_HOST = "localhost"
 MILVUS_PORT = "19530"
-ES_HOST = "localhost"
-ES_PORT = "9200"
-
-# --- Milvus collection settings ---
 KEYFRAME_COLLECTION_NAME = "video_keyframes"
 VECTOR_DIMENSION = 1024 
 
-# --- Elasticsearch index names ---
-METADATA_INDEX_NAME = "video_metadata"
-ES_FRAMES_INDEX_NAME = "video_frames"
+# --- MongoDB settings ---
+MONGO_URI = "mongodb://localhost:27017"
+MONGO_DB_NAME = "video_metadata"
+MONGO_OBJECT_COLLECTION = "object_detection_results"
 
 # --- Data paths ---
 CLIP_FEATURES_DIR = "data/embeddings"
-METADATA_DIR = "data/media-info"
-OCR_DIR = "data/ocr_results"
-OBJECT_DETECTION_DIR = "data/objects"
 KEYFRAMES_DIR = "data/keyframes"
+OBJECT_DETECTION_DIR = "data/objects"
 VIDEOS_DIR = "data/videos"
 
 # --- Model ---
 CLIP_MODEL_NAME = "ViT-H-14-378-quickgelu"
 CLIP_PRETRAINED = "dfn5b"
-
-# --- Search Parameters ---
-RRF_K = 60 # Fusion parameter
 
 OBJECT_LABELS = [
     "Tortoise", "Container", "Magpie", "Sea turtle", "Football", "Ambulance", 
